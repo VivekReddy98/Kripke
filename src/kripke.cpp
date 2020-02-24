@@ -4,7 +4,6 @@
 //
 // SPDX-License-Identifier: (BSD-3-Clause)
 //
-  
 #include <Kripke.h>
 #include <Kripke/Core/Comm.h>
 #include <Kripke/Core/DataStore.h>
@@ -19,6 +18,8 @@
 #include <algorithm>
 #include <string>
 #include <sstream>
+//#include <chrono>
+#include "papi.h"
 
 #ifdef KRIPKE_USE_OPENMP
 #include <omp.h>
@@ -32,40 +33,38 @@
 #include </bgsys/drivers/ppcfloor/spi/include/kernel/location.h>
 #endif
 
-
-
 void usage(void){
 
   Kripke::Core::Comm comm;
   if(comm.rank() == 0){
     // Get a new object with defaulted values
     InputVariables def;
-    
+
     // Display command line
     printf("Usage:  [srun ...] kripke [options...]\n\n");
-    
+
     // Display each option
     printf("Problem Size Options:\n");
     printf("---------------------\n");
-    
+
     printf("  --groups <ngroups>     Number of energy groups\n");
     printf("                         Default:  --groups %d\n\n", def.num_groups);
-    
+
     printf("  --legendre <lorder>    Scattering Legendre Expansion Order (0, 1, ...)\n");
     printf("                         Default:  --legendre %d\n\n", def.legendre_order);
-    
+
     printf("  --quad [<ndirs>|<polar>:<azim>]\n");
     printf("                         Define the quadrature set to use\n");
     printf("                         Either a fake S2 with <ndirs> points,\n");
     printf("                         OR Gauss-Legendre with <polar> by <azim> points\n");
     printf("                         Default:  --quad %d\n\n", def.num_directions);
-    
-    
-    
+
+
+
     printf("  --zones <x,y,z>        Number of zones in x,y,z\n");
     printf("                         Default:  --zones %d,%d,%d\n\n", def.nx, def.ny, def.nz);
-    
-    
+
+
     printf("\n");
     printf("Physics Parameters:\n");
     printf("-------------------\n");
@@ -85,38 +84,38 @@ void usage(void){
     printf("  --layout <LAYOUT>      Data layout and loop nesting order\n");
     printf("                         Available: DGZ,DZG,GDZ,GZD,ZDG,ZGD\n");
     printf("                         Default:   --layout %s\n\n", layoutToString(def.al_v.layout_v).c_str());
-    
+
     printf("\n");
     printf("Parallel Decomposition Options:\n");
     printf("-------------------------------\n");
 
     printf("  --procs <npx,npy,npz>  Number of MPI ranks in each spatial dimension\n");
     printf("                         Default:  --procs %d,%d,%d\n\n", def.npx, def.npy, def.npz);
-    
+
     printf("  --dset <ds>            Number of direction-sets\n");
     printf("                         Must be a factor of 8, and divide evenly the number\n");
     printf("                         of quadrature points\n");
     printf("                         Default:  --dset %d\n\n", def.num_dirsets);
-    
+
     printf("  --gset <gs>            Number of energy group-sets\n");
     printf("                         Must divide evenly the number energy groups\n");
     printf("                         Default:  --gset %d\n\n", def.num_groupsets);
-    
+
     printf("  --zset <zx>,<zy>,<zz>  Number of zone-sets in x,y, and z\n");
     printf("                         Default:  --zset %d,%d,%d\n\n", def.num_zonesets_dim[0], def.num_zonesets_dim[1], def.num_zonesets_dim[2]);
-    
+
     printf("\n");
     printf("Solver Options:\n");
     printf("---------------\n");
-    
+
     printf("  --niter <NITER>        Number of solver iterations to run\n");
     printf("                         Default:  --niter %d\n\n", def.niter);
-    
+
     printf("  --pmethod <method>     Parallel solver method\n");
     printf("                         sweep: Full up-wind sweep (wavefront algorithm)\n");
     printf("                         bj: Block Jacobi\n");
     printf("                         Default: --pmethod sweep\n\n");
-    
+
     printf("\n");
   }
 
@@ -175,7 +174,28 @@ int main(int argc, char **argv) {
   /*
    * Initialize MPI
    */
+  // PAPI counters we want to use
+  int events[2] = {PAPI_RES_STL, PAPI_STL_ICY}, ret;
+
+  // Counter values will be stored here
+  long long values[2];
+
+  // Check if required number of counters are present or not
+  if (PAPI_num_counters() < 2) {
+      fprintf(stderr, "No hardware counters here, or PAPI not supported.\n");
+      exit(1);
+  }
+
+  //auto start_time = chrono::steady_clock::now();
+
+  if ((ret = PAPI_start_counters(events, 2)) != PAPI_OK) {
+     fprintf(stderr, "PAPI failed to start counters: %s\n", PAPI_strerror(ret));
+     exit(1);
+  }
+
   Kripke::Core::Comm::init(&argc, &argv);
+
+  // Start PAPI counters
 
   Kripke::Core::Comm comm;
 
@@ -185,14 +205,14 @@ int main(int argc, char **argv) {
   if (myid == 0) {
     /* Print out a banner message along with a version number. */
     printf("\n");
-    printf("   _  __       _         _\n");                   
-    printf("  | |/ /      (_)       | |\n");                  
-    printf("  | ' /  _ __  _  _ __  | | __ ___\n");           
-    printf("  |  <  | '__|| || '_ \\ | |/ // _ \\ \n");     
-    printf("  | . \\ | |   | || |_) ||   <|  __/\n");     
-    printf("  |_|\\_\\|_|   |_|| .__/ |_|\\_\\\\___|\n");          
-    printf("                 | |\n");                         
-    printf("                 |_|        Version %s\n", KRIPKE_VERSION);        
+    printf("   _  __       _         _\n");
+    printf("  | |/ /      (_)       | |\n");
+    printf("  | ' /  _ __  _  _ __  | | __ ___\n");
+    printf("  |  <  | '__|| || '_ \\ | |/ // _ \\ \n");
+    printf("  | . \\ | |   | || |_) ||   <|  __/\n");
+    printf("  |_|\\_\\|_|   |_|| .__/ |_|\\_\\\\___|\n");
+    printf("                 | |\n");
+    printf("                 |_|        Version %s\n", KRIPKE_VERSION);
     printf("\n");
     printf("LLNL-CODE-775068\n");
     printf("\n");
@@ -206,7 +226,7 @@ int main(int argc, char **argv) {
     printf("DE-AC52-07NA27344.\n");
     printf("\n");
     printf("Author: Adam J. Kunen <kunen1@llnl.gov>\n");
-    printf("\n"); 
+    printf("\n");
 
     // Display information about how we were built
     printf("Compilation Options:\n");
@@ -247,9 +267,6 @@ int main(int argc, char **argv) {
     printf("  Caliper Enabled:        No\n");
 #endif
 
-
-
-
     /* Print out some information about how OpenMP threads are being mapped
      * to CPU cores.
      */
@@ -288,7 +305,7 @@ int main(int argc, char **argv) {
    * Default input parameters
    */
   InputVariables vars;
-  
+
   /*
    * Parse command line
    */
@@ -298,17 +315,17 @@ int main(int argc, char **argv) {
     if(opt == "-h" || opt == "--help"){usage();}
     else if(opt == "--name"){vars.run_name = cmd.pop();}
     else if(opt == "--dset"){
-      vars.num_dirsets = std::atoi(cmd.pop().c_str());      
+      vars.num_dirsets = std::atoi(cmd.pop().c_str());
     }
     else if(opt == "--gset"){
-      vars.num_groupsets = std::atoi(cmd.pop().c_str());      
+      vars.num_groupsets = std::atoi(cmd.pop().c_str());
     }
     else if(opt == "--zset"){
       std::vector<std::string> nz = split(cmd.pop(), ',');
       if(nz.size() != 3) usage();
       vars.num_zonesets_dim[0] = std::atoi(nz[0].c_str());
       vars.num_zonesets_dim[1] = std::atoi(nz[1].c_str());
-      vars.num_zonesets_dim[2] = std::atoi(nz[2].c_str());      
+      vars.num_zonesets_dim[2] = std::atoi(nz[2].c_str());
     }
     else if(opt == "--zones"){
       std::vector<std::string> nz = split(cmd.pop(), ',');
@@ -337,7 +354,7 @@ int main(int argc, char **argv) {
       }
     }
     else if(opt == "--groups"){
-      vars.num_groups = std::atoi(cmd.pop().c_str());      
+      vars.num_groups = std::atoi(cmd.pop().c_str());
     }
     else if(opt == "--quad"){
       std::vector<std::string> p = split(cmd.pop(), ':');
@@ -376,17 +393,17 @@ int main(int argc, char **argv) {
       vars.niter = std::atoi(cmd.pop().c_str());
     }
     else if(opt == "--arch"){
-      vars.al_v.arch_v = Kripke::stringToArch(cmd.pop());     
+      vars.al_v.arch_v = Kripke::stringToArch(cmd.pop());
     }
     else if(opt == "--layout"){
-      vars.al_v.layout_v = Kripke::stringToLayout(cmd.pop());     
+      vars.al_v.layout_v = Kripke::stringToLayout(cmd.pop());
     }
     else{
       printf("Unknwon options %s\n", opt.c_str());
       usage();
     }
   }
-  
+
   // Check that the input arguments are valid
   if(vars.checkValues()){
     exit(1);
@@ -412,7 +429,7 @@ int main(int argc, char **argv) {
     else {
       printf("Gauss-Legendre, %d polar, %d azimuthal (%d points)\n", vars.quad_num_polar, vars.quad_num_azimuthal, vars.num_directions);
     }
-   
+
 
     printf("\n");
     printf("  Physical Properties:\n");
@@ -424,8 +441,8 @@ int main(int argc, char **argv) {
     printf("  Solver Options:\n");
     printf("    Number iterations:     %d\n", vars.niter);
 
-    
-    
+
+
     printf("\n");
     printf("  MPI Decomposition Options:\n");
     printf("    Total MPI tasks:       %d\n", num_tasks);
@@ -448,8 +465,8 @@ int main(int argc, char **argv) {
     printf("    Data Layout:           %s\n", layoutToString(vars.al_v.layout_v).c_str());
 
 
-    
-    
+
+
   }
 
   /*
@@ -460,7 +477,7 @@ int main(int argc, char **argv) {
   cali_set_global_int_byname("kripke.nx", vars.nx);
   cali_set_global_int_byname("kripke.ny", vars.ny);
   cali_set_global_int_byname("kripke.nz", vars.nz);
-  
+
   cali_set_global_int_byname("kripke.groups",         vars.num_groups);
   cali_set_global_int_byname("kripke.legendre_order", vars.legendre_order);
 
@@ -512,13 +529,34 @@ int main(int argc, char **argv) {
     printf("  Sweep efficiency :  %4.5lf [100.0 * SweepSubdomain time / SweepSolver time]\n", sweep_eff);
     printf("  Number of unknowns: %lu\n", (unsigned long) num_unknowns);
   }
-  
+
   // Cleanup and exit
   Kripke::Core::Comm::finalize();
+
+  // auto end_time = chrono::steady_clock::now();
+
+  //cout << "Elapsed time in nanoseconds : "  << chrono::duration_cast<chrono::nanoseconds>(end - start).count() << " ns" << endl;
 
   if(myid == 0){
     printf("\n");
     printf("END\n");
   }
+
+
+  // Read counter data
+  if ((ret = PAPI_read_counters(values, 2)) != PAPI_OK) {
+      fprintf(stderr, "PAPI failed to read counters: %s\n", PAPI_strerror(ret));
+      exit(1);
+  }
+
+  // Print counter data : "Process rank" "Resurce stall cyles" "No-issue stall cycles"
+  std::cout << "  rank: " << myid << ""  << "  PAPI_RES_STL: " << values[0] << "  PAPI_STL_ICY: " << values[1] << std::endl;
+
+  // Stop counters
+  if ((ret = PAPI_stop_counters(values, 2)) != PAPI_OK) {
+          fprintf(stderr, "PAPI failed to stop counters: %s\n", PAPI_strerror(ret));
+          exit(1);
+  }
+
   return (0);
 }
